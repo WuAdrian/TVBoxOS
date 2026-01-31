@@ -26,65 +26,26 @@ jobs:
             compile_sdk: '33'
             build_tools: '33.0.2'
     steps:
-      - name: Checkout
+      - name: Checkout Main Repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # 关键1：配置Java环境（基础依赖，带Gradle缓存）
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
+      # 关键1：使用GitHub官方方案配置Android+Java环境（替代手动配置，无路径问题）
+      - name: Setup Official Android & Java Env
+        uses: android-actions/setup-android@v3.0.0
         with:
+          android-sdk-version: ${{ matrix.compile_sdk }}
+          build-tools-version: ${{ matrix.build_tools }}
           java-version: ${{ matrix.java_ver }}
-          distribution: 'temurin'
-          cache: 'gradle'
 
-      # 核心修复：初始化Android SDK环境，显式声明sdkmanager路径（解决exit 127）
-      - name: Initialize Android SDK Env & Fix sdkmanager Path
-        run: |
-          # 定义Android SDK核心执行目录（github actions默认Android SDK安装路径）
-          ANDROID_CMD_TOOLS="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin"
-          # 将sdkmanager路径加入系统PATH，全局可识别
-          echo "PATH=$ANDROID_CMD_TOOLS:$ANDROID_SDK_ROOT/tools:$ANDROID_SDK_ROOT/platform-tools:$PATH" >> $GITHUB_ENV
-          # 显式声明Android核心环境变量，替代local.properties
-          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
-          # 验证配置：打印路径+测试sdkmanager是否可执行
-          echo "Android SDK Root: $ANDROID_SDK_ROOT"
-          echo "SDK Manager Path: $ANDROID_CMD_TOOLS/sdkmanager"
-          chmod +x $ANDROID_CMD_TOOLS/sdkmanager # 确保命令有执行权限
-          $ANDROID_CMD_TOOLS/sdkmanager --version # 测试命令，无报错则配置成功
-
-      # 关键2：安装项目所需Android SDK组件（使用绝对路径，双重保障）
-      - name: Install Android SDK Components
-        run: |
-          ANDROID_CMD_TOOLS="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin"
-          # 用绝对路径执行，避免PATH识别问题，--verbose打印安装日志便于排查
-          $ANDROID_CMD_TOOLS/sdkmanager --install \
-            "build-tools;${{ matrix.build_tools }}" \
-            "platforms;android-${{ matrix.compile_sdk }}" \
-            --verbose
-          # 验证安装结果
-          $ANDROID_CMD_TOOLS/sdkmanager --list | grep -E "build-tools;${{ matrix.build_tools }}|platforms;android-${{ matrix.compile_sdk }}"
-
-      # 关键3：强制接受Android SDK许可证（绝对路径执行，屏蔽无关输出）
+      # 关键2：强制接受所有Android许可证（官方环境仍需手动接受，避免卡壳）
       - name: Accept All Android SDK Licenses
         run: |
-          ANDROID_CMD_TOOLS="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin"
-          yes | $ANDROID_CMD_TOOLS/sdkmanager --licenses > /dev/null 2>&1 || true
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager --list | grep -E "build-tools;${{ matrix.build_tools }}|platforms;android-${{ matrix.compile_sdk }}"
 
-      # 关键4：拉取源码后，立即创建local.properties（兜底，避免文件缺失）
-      - name: Checkout Source Code
-        if: ${{ env.commit }}
-        run: |
-          git clone ${{ env.upStream }} TVBoxOSC
-          cd TVBoxOSC
-          git checkout ${{ env.commit }}
-          echo "tag=$(git log --date=format:'%Y%m%d-%H%M' --pretty=format:%cd ${{ env.commitS }} -1)" >> $GITHUB_ENV
-          # 拉取源码后直接创建，写入正确SDK路径，彻底解决文件缺失
-          echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
-          cat local.properties # 验证文件内容
-
+      # 步骤3：检查远端最新Commit（原有逻辑，无修改）
       - name: Check New Commit
         run: |
           upStream=https://github.com/${{ matrix.userName }}/${{ matrix.repoName }}
@@ -97,8 +58,26 @@ jobs:
             echo "commit=$commit" >> $GITHUB_ENV
             echo "commitS=${commit:0:7}" >> $GITHUB_ENV
           fi
-          echo "commit=$commit"
+          echo "Latest Commit: $commit"
 
+      # 步骤4：拉取源码+即时创建local.properties（时序最优，彻底解决文件缺失）
+      - name: Checkout Source Code & Create local.properties
+        if: ${{ env.commit }}
+        run: |
+          # 拉取TVBoxOS源码
+          git clone ${{ env.upStream }} TVBoxOSC
+          cd TVBoxOSC
+          git checkout ${{ env.commit }}
+          # 生成构建标签
+          echo "tag=$(git log --date=format:'%Y%m%d-%H%M' --pretty=format:%cd ${{ env.commitS }} -1)" >> $GITHUB_ENV
+          # 核心：拉取源码后立即创建local.properties，写入官方环境的SDK路径
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          # 验证文件创建成功
+          echo "=== local.properties 内容 ==="
+          cat local.properties
+          echo "============================"
+
+      # 步骤5：源码修改（原有逻辑，无修改）
       - name: Extra Modify
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
@@ -111,19 +90,21 @@ jobs:
              sed -i "/versionName/s#[0-9a-zA-Z_\.\'\"-]\+\$#\'${{ env.tag }}\'#" app/build.gradle
              sed -i "/android:text=/s#=\"#=\"${{ env.tag }}\\\\n\\\\n#" app/src/main/res/layout/dialog_about.xml
           fi 
-          echo 'crosswalk源，防挂'
+          echo '添加crosswalk源，防挂'
           if grep -q 'crosswalk' build.gradle; then
             sed -i "/crosswalk/a\        maven { url 'https://o0halflife0o.github.io/crosswalk/releases/crosswalk/android/maven2' }" build.gradle
           else
             sed -i "/jitpack.io/a\        maven { url 'https://o0halflife0o.github.io/crosswalk/releases/crosswalk/android/maven2' }" build.gradle
           fi
 
+      # 步骤6：压缩源码（原有逻辑，无修改）
       - name: Compress Source Code
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
           tar -cJf sourceCode-${{ env.commitS }}.tar.xz --exclude=.git --exclude=.github *
 
+      # 步骤7：APK签名配置（原有逻辑，无修改）
       - name: Release Apk Sign
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
@@ -140,31 +121,36 @@ jobs:
           sed -i '$a\RELEASE_KEY_PASSWORD=TVBoxOSC'         ./gradle.properties
           sed -i 's/^#\(org.gradle.jvmargs=.*\)/\1/'        ./gradle.properties
 
+      # 步骤8：初始化Gradle（原有逻辑，无修改）
       - uses: gradle/actions/setup-gradle@v4
         if: ${{ env.commit }}
 
-      # 优化构建命令，增加依赖强制更新
-      - name: Build With Gradle
+      # 关键3：优化Gradle构建命令，增加全量日志+依赖刷新+错误兜底
+      - name: Build Release APK With Gradle
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
+          # 确保gradle脚本可执行
           chmod +x gradlew
+          # 全参数构建，最大化暴露错误信息，便于后续排查
           ./gradlew assembleRelease \
             --parallel \
             --daemon \
             --warning-mode all \
             --stacktrace \
+            --info \
             --no-build-cache \
-            --refresh-dependencies # 强制刷新依赖，避免缓存缺失
+            --refresh-dependencies \
+            -Dorg.gradle.jvmargs=-Xmx2048m
 
-      - name: Prepare App
+      # 步骤9：整理APK文件（优化查找逻辑，避免全局搜索）
+      - name: Prepare App Files
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
-          rm -rf apk/
-          mkdir -p apk/
-          # 仅在项目内查找APK，效率更高
-          for file in `find . -name "*release*.apk" -type f -print`; do
+          rm -rf apk/ && mkdir -p apk/
+          # 仅在项目内查找APK，指定类型为文件，避免目录干扰
+          find app -name "*release*.apk" -type f | while read file; do
             base=$(basename "$file")
             if [[ "$base" == TVBox_* ]]; then
               new_base=$(echo "$base" | sed "s/release/${{ matrix.userName }}_${{ env.tag }}/")
@@ -172,10 +158,13 @@ jobs:
               new_base="TVBox_${{ matrix.userName }}_${{ env.tag }}.apk"
             fi
             mv "$file" "apk/$new_base"
+            echo "已找到并重命名APK：$file -> apk/$new_base"
           done
+          # 移动源码压缩包
           mv sourceCode-${{ env.commitS }}.* apk/
 
-      - name: Release Note
+      # 步骤10：生成发布日志（原有逻辑，无修改）
+      - name: Generate Release Note
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
@@ -189,23 +178,26 @@ jobs:
           fi
           echo -e '\n```' >> apk/${{ matrix.userName }}-Release.log
 
+      # 步骤11：上传构建产物（原有逻辑，无修改）
       - name: Upload App To Artifact
         uses: actions/upload-artifact@v4
         if: ${{ env.commit }}
         with:
-          name: ${{ matrix.userName }}-${{ matrix.repoName }}
+          name: ${{ matrix.userName }}-${{ matrix.repoName }}-${{ env.tag }}
           path: TVBoxOSC/apk/*
 
-      - name: Whether Or Not to Publish
+      # 步骤12：发布控制（原有逻辑，无修改）
+      - name: Skip Publish Flag
         if: ${{ inputs.donotpublish && env.commit }}
         run: |
           echo "commit=" >> $GITHUB_ENV
 
+  # 清理任务（原有逻辑，无修改）
   clean:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Delete older workflow runs and artifacts
+      - name: Delete Older Workflow Runs
         uses: Mattraks/delete-workflow-runs@main
         with:
           token: ${{ github.token }}

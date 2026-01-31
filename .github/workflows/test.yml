@@ -23,15 +23,15 @@ jobs:
             repoName: TVBoxOS
             branchName: main
             java_ver: '17'
-            compile_sdk: '33'  # 适配绝大多数Android项目，需与项目build.gradle一致
-            build_tools: '33.0.2' # 与compile_sdk匹配的构建工具版本
+            compile_sdk: '33'
+            build_tools: '33.0.2'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # 关键1：配置Java环境（前置基础）
+      # 关键1：配置Java环境（基础依赖，带Gradle缓存）
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
@@ -39,29 +39,51 @@ jobs:
           distribution: 'temurin'
           cache: 'gradle'
 
-      # 关键2：显式配置Android SDK环境变量（核心，替代local.properties）
-      - name: Configure Android SDK Env
+      # 核心修复：初始化Android SDK环境，显式声明sdkmanager路径（解决exit 127）
+      - name: Initialize Android SDK Env & Fix sdkmanager Path
         run: |
+          # 定义Android SDK核心执行目录（github actions默认Android SDK安装路径）
+          ANDROID_CMD_TOOLS="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin"
+          # 将sdkmanager路径加入系统PATH，全局可识别
+          echo "PATH=$ANDROID_CMD_TOOLS:$ANDROID_SDK_ROOT/tools:$ANDROID_SDK_ROOT/platform-tools:$PATH" >> $GITHUB_ENV
+          # 显式声明Android核心环境变量，替代local.properties
           echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
-          echo "PATH=$ANDROID_SDK_ROOT/tools:$ANDROID_SDK_ROOT/platform-tools:$PATH" >> $GITHUB_ENV
-          echo "Android SDK Root: $ANDROID_SDK_ROOT" # 验证路径输出
+          # 验证配置：打印路径+测试sdkmanager是否可执行
+          echo "Android SDK Root: $ANDROID_SDK_ROOT"
+          echo "SDK Manager Path: $ANDROID_CMD_TOOLS/sdkmanager"
+          chmod +x $ANDROID_CMD_TOOLS/sdkmanager # 确保命令有执行权限
+          $ANDROID_CMD_TOOLS/sdkmanager --version # 测试命令，无报错则配置成功
 
-      # 关键3：安装项目所需Android SDK组件（解决编译依赖缺失）
+      # 关键2：安装项目所需Android SDK组件（使用绝对路径，双重保障）
       - name: Install Android SDK Components
         run: |
-          sdkmanager --install "build-tools;${{ matrix.build_tools }}" "platforms;android-${{ matrix.compile_sdk }}" --verbose
-          sdkmanager --list | grep -E "build-tools|platforms" # 验证安装结果
+          ANDROID_CMD_TOOLS="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin"
+          # 用绝对路径执行，避免PATH识别问题，--verbose打印安装日志便于排查
+          $ANDROID_CMD_TOOLS/sdkmanager --install \
+            "build-tools;${{ matrix.build_tools }}" \
+            "platforms;android-${{ matrix.compile_sdk }}" \
+            --verbose
+          # 验证安装结果
+          $ANDROID_CMD_TOOLS/sdkmanager --list | grep -E "build-tools;${{ matrix.build_tools }}|platforms;android-${{ matrix.compile_sdk }}"
 
-      # 关键4：强制接受所有Android SDK许可证（避免构建卡壳）
-      - name: Accept Android SDK Licenses
-        run: yes | sdkmanager --licenses > /dev/null 2>&1 || true
-
-      # 关键5：在项目目录手动创建空的local.properties（终极兜底，防止Gradle强制读取）
-      - name: Create Empty local.properties (Fallback)
+      # 关键3：强制接受Android SDK许可证（绝对路径执行，屏蔽无关输出）
+      - name: Accept All Android SDK Licenses
         run: |
-          touch TVBoxOSC/local.properties # 提前创建空文件，避免文件不存在报错
-          echo "sdk.dir=$ANDROID_SDK_ROOT" >> TVBoxOSC/local.properties # 写入SDK路径，双重保障
+          ANDROID_CMD_TOOLS="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin"
+          yes | $ANDROID_CMD_TOOLS/sdkmanager --licenses > /dev/null 2>&1 || true
+
+      # 关键4：拉取源码后，立即创建local.properties（兜底，避免文件缺失）
+      - name: Checkout Source Code
+        if: ${{ env.commit }}
+        run: |
+          git clone ${{ env.upStream }} TVBoxOSC
+          cd TVBoxOSC
+          git checkout ${{ env.commit }}
+          echo "tag=$(git log --date=format:'%Y%m%d-%H%M' --pretty=format:%cd ${{ env.commitS }} -1)" >> $GITHUB_ENV
+          # 拉取源码后直接创建，写入正确SDK路径，彻底解决文件缺失
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
+          cat local.properties # 验证文件内容
 
       - name: Check New Commit
         run: |
@@ -76,14 +98,6 @@ jobs:
             echo "commitS=${commit:0:7}" >> $GITHUB_ENV
           fi
           echo "commit=$commit"
-
-      - name: Checkout Source Code
-        if: ${{ env.commit }}
-        run: |
-          git clone ${{ env.upStream }} TVBoxOSC
-          cd TVBoxOSC
-          git checkout ${{ env.commit }}
-          echo "tag=$(git log --date=format:'%Y%m%d-%H%M' --pretty=format:%cd ${{ env.commitS }} -1)" >> $GITHUB_ENV
 
       - name: Extra Modify
         if: ${{ env.commit }}
@@ -129,6 +143,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         if: ${{ env.commit }}
 
+      # 优化构建命令，增加依赖强制更新
       - name: Build With Gradle
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
@@ -140,7 +155,7 @@ jobs:
             --warning-mode all \
             --stacktrace \
             --no-build-cache \
-            -Dorg.gradle.logging.level=INFO
+            --refresh-dependencies # 强制刷新依赖，避免缓存缺失
 
       - name: Prepare App
         if: ${{ env.commit }}
@@ -148,8 +163,8 @@ jobs:
         run: |
           rm -rf apk/
           mkdir -p apk/
-          # 优化：仅在项目内查找APK，避免全局搜索耗时
-          for file in `find . -name "*release*.apk" -print`; do
+          # 仅在项目内查找APK，效率更高
+          for file in `find . -name "*release*.apk" -type f -print`; do
             base=$(basename "$file")
             if [[ "$base" == TVBox_* ]]; then
               new_base=$(echo "$base" | sed "s/release/${{ matrix.userName }}_${{ env.tag }}/")

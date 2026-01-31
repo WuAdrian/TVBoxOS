@@ -1,8 +1,6 @@
 name: Test
 
 on:
-  #schedule:
-    #- cron: 0 13 1 * *
   workflow_dispatch:
     inputs:
       rebuild:
@@ -24,24 +22,43 @@ jobs:
           - userName: q215613905
             repoName: TVBoxOS
             branchName: main
-            java_ver: '17' # 新增：指定Java版本，与Gradle7.3.3兼容
+            java_ver: '17'          # 与Gradle7.3.3兼容
+            compile_sdk: '33'       # 核心：指定项目compileSdkVersion（需与项目build.gradle一致）
+            build_tools: '33.0.2'   # 核心：指定项目buildToolsVersion（需与项目build.gradle一致）
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # 关键修改1：提前配置Java+Android SDK环境（移至最前，取消错误条件）
-      - name: Setup Java and Android SDK
+      # 关键1：提前配置Java环境+Gradle缓存，基础环境前置
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           java-version: ${{ matrix.java_ver }}
           distribution: 'temurin'
-          cache: 'gradle' # 新增：缓存Gradle，加速后续构建
+          cache: 'gradle'
 
-      # 关键修改2：接受Android SDK许可证（CI环境必须，否则构建会卡在许可证确认）
-      - name: Accept Android SDK Licenses
-        run: yes | sdkmanager --licenses || true
+      # 关键2：配置Android SDK环境变量（CI环境核心，替代local.properties）
+      - name: Set Android SDK Env
+        run: |
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          echo "PATH=$ANDROID_SDK_ROOT/tools:$ANDROID_SDK_ROOT/platform-tools:$PATH" >> $GITHUB_ENV
+          # 验证SDK路径
+          echo "Android SDK Path: $ANDROID_SDK_ROOT"
+
+      # 关键3：安装指定版本的Android Build-Tools和Platform（解决compileSdk解析失败）
+      - name: Install Android SDK Components
+        run: |
+          sdkmanager --install "build-tools;${{ matrix.build_tools }}" "platforms;android-${{ matrix.compile_sdk }}" --verbose
+          # 验证安装结果
+          sdkmanager --list | grep -E "build-tools;${{ matrix.build_tools }}|platforms;android-${{ matrix.compile_sdk }}"
+
+      # 关键4：强制接受所有Android SDK许可证（避免构建卡许可证确认）
+      - name: Accept All Android SDK Licenses
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
 
       - name: Check New Commit
         run: |
@@ -106,17 +123,23 @@ jobs:
           sed -i '$a\RELEASE_KEY_PASSWORD=TVBoxOSC'         ./gradle.properties
           sed -i 's/^#\(org.gradle.jvmargs=.*\)/\1/'        ./gradle.properties
 
-      # 关键修改3：移除原错误的setup-gradle/setup-java步骤（已提前配置，无需重复）
       - uses: gradle/actions/setup-gradle@v4
         if: ${{ env.commit }}
 
+      # 关键5：优化Gradle构建命令，增加错误日志输出+禁用离线模式
       - name: Build With Gradle
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
           chmod +x gradlew
-          # 优化：添加--no-build-cache避免缓存冲突，--stacktrace便于排查后续错误
-          ./gradlew assembleRelease --parallel --daemon --warning-mode all --stacktrace
+          ./gradlew assembleRelease \
+            --parallel \
+            --daemon \
+            --warning-mode all \
+            --stacktrace \
+            --no-build-cache \
+            --no-offline \
+            -Dorg.gradle.logging.level=INFO
 
       - name: Prepare App
         if: ${{ env.commit }}
@@ -124,7 +147,7 @@ jobs:
         run: |
           rm -rf apk/
           mkdir -p apk/
-          for file in `find ~ -name "*release*.apk" -print`; do
+          for file in `find . -name "*release*.apk" -print`; do  # 优化：仅查找项目内APK，避免全局搜索
             base=$(basename "$file")
             if [[ "$base" == TVBox_* ]]; then
               new_base=$(echo "$base" | sed "s/release/${{ matrix.userName }}_${{ env.tag }}/")
@@ -154,8 +177,7 @@ jobs:
         if: ${{ env.commit }}
         with:
           name: ${{ matrix.userName }}-${{ matrix.repoName }}
-          path: |
-            TVBoxOSC/apk/*
+          path: TVBoxOSC/apk/*
 
       - name: Whether Or Not to Publish
         if: ${{ inputs.donotpublish && env.commit }}

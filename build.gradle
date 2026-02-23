@@ -14,6 +14,11 @@ buildscript {
     }
 }
 
+plugins {
+    id 'com.android.application'
+    id 'kotlin-android'
+}
+
 allprojects {
     repositories {
         google()
@@ -27,11 +32,6 @@ allprojects {
 
 task clean(type: Delete) {
     delete rootProject.buildDir
-}
-
-plugins {
-    id 'com.android.application'
-    id 'kotlin-android'
 }
 
 android {

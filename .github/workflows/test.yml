@@ -90,6 +90,9 @@ jobs:
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
+          # 复制签名文件
+          cp -f ${{ github.workspace }}/.github/workflows/TVBoxOSC.jks app/TVBoxOSC.jks
+          
           # 添加签名配置到 gradle.properties
           cat >> ./gradle.properties << 'EOF'
 RELEASE_STORE_FILE=./TVBoxOSC.jks
@@ -98,23 +101,52 @@ RELEASE_STORE_PASSWORD=TVBoxOSC
 RELEASE_KEY_PASSWORD=TVBoxOSC
 EOF
           
-          # 复制签名文件
-          cp -f ${{ github.workspace }}/.github/workflows/TVBoxOSC.jks app/TVBoxOSC.jks
-          
-          # 修改 app/build.gradle 以使用签名配置
-          if grep -q "signingConfigs" app/build.gradle; then
-            echo "签名配置已存在，跳过"
-          else
-            # 在 android { 之后插入签名配置
-            sed -i '/^android {$/a\    signingConfigs {\n        release {\n            storeFile file(RELEASE_STORE_FILE)\n            storePassword RELEASE_STORE_PASSWORD\n            keyAlias RELEASE_KEY_ALIAS\n            keyPassword RELEASE_KEY_PASSWORD\n        }\n    }' app/build.gradle
-          fi
-          
-          # 为 release buildType 添加签名配置
-          if grep -q "release {" app/build.gradle; then
-            if ! grep -A 5 "release {" app/build.gradle | grep -q "signingConfig"; then
-              sed -i '/release {$/a\        signingConfig signingConfigs.release' app/build.gradle
-            fi
-          fi
+          # 使用 Python 修改 build.gradle
+          python3 << 'PYTHON_EOF'
+import re
+
+build_gradle_path = 'app/build.gradle'
+
+with open(build_gradle_path, 'r', encoding='utf-8') as f:
+    content = f.read()
+
+# 检查是否已存在 signingConfigs
+if 'signingConfigs' in content:
+    print("签名配置已存在，跳过")
+else:
+    # 在 android { 之后插入 signingConfigs
+    signing_config_block = '''
+    signingConfigs {
+        release {
+            storeFile file(RELEASE_STORE_FILE)
+            storePassword RELEASE_STORE_PASSWORD
+            keyAlias RELEASE_KEY_ALIAS
+            keyPassword RELEASE_KEY_PASSWORD
+        }
+    }
+'''
+    content = re.sub(
+        r'(android\s*\{)',
+        r'\1' + signing_config_block,
+        content,
+        count=1
+    )
+
+# 为 release buildType 添加签名配置
+if 'signingConfig' not in content:
+    release_signing = '        signingConfig signingConfigs.release\n'
+    content = re.sub(
+        r'(release\s*\{)',
+        r'\1\n' + release_signing,
+        content,
+        count=1
+    )
+
+with open(build_gradle_path, 'w', encoding='utf-8') as f:
+    f.write(content)
+    
+print("Gradle 签名配置已成功添加")
+PYTHON_EOF
           
       - uses: actions/setup-java@v4
         if: ${{ matrix.java_ver }}

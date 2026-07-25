@@ -2,15 +2,13 @@ plugins {
     id 'com.android.library'
     id 'com.chaquo.python'
 }
-
 android {
     compileSdk 33
-
     defaultConfig {
         minSdkVersion 19
         targetSdkVersion 28
         python {
-            buildPython("D:/Programs/Python/Python38/python.exe")
+            buildPython("D:/Programs/Python/Python38/python.exe", "python3", "python")
             pip {
                 install "lxml"
                 install "ujson"
@@ -23,7 +21,6 @@ android {
             }
         }
     }
-
     flavorDimensions "mode"
     productFlavors {
         python {
@@ -45,7 +42,6 @@ android {
             }
         }
     }
-
     buildTypes {
         debug {
         }
@@ -58,7 +54,6 @@ android {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
     }
-
     sourceSets {
         main{
             // Android代码模块
@@ -69,7 +64,5 @@ android {
     }
     buildToolsVersion '30.0.3'
 }
-
 dependencies {
-
 }

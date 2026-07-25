@@ -1,21 +1,17 @@
 name: Build APK
-
 on:
   push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
   workflow_dispatch:
-
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   GRADLE_OPTS: -Xmx2048m -Dorg.gradle.daemon=false
-
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 60
-
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,6 +31,10 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      # 修复 Chaquopy 插件报错 - local.properties 缺失导致的 FileNotFoundException
+      - name: Create local.properties
+        run: echo "sdk.dir=$ANDROID_HOME" > local.properties
+
       # 缓存 Android SDK 以加速构建
       - name: Cache Android SDK
         uses: actions/cache@v4
@@ -51,7 +51,7 @@ jobs:
         run: ./gradlew assembleDebug --stacktrace --no-daemon
         continue-on-error: false
 
-      # 列出所有生成的 APK
+      # 列出所有生成的 APK，若为空则直接失败，避免误判构建成功
       - name: List generated APKs
         if: success()
         run: |
@@ -81,5 +81,3 @@ jobs:
             app/build/outputs/
             build/
           retention-days: 3
-
-  

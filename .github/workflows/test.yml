@@ -17,7 +17,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 修复权限问题 - 解决 "Permission denied" 错误
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
@@ -28,14 +27,17 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.8'
+
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      # 修复 Chaquopy 插件报错 - local.properties 缺失导致的 FileNotFoundException
       - name: Create local.properties
         run: echo "sdk.dir=$ANDROID_HOME" > local.properties
 
-      # 缓存 Android SDK 以加速构建
       - name: Cache Android SDK
         uses: actions/cache@v4
         with:
@@ -46,12 +48,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-android-sdk-
 
-      # 构建 Debug APK - 详细日志用于问题诊断
       - name: Build Debug APK
         run: ./gradlew assembleDebug --stacktrace --no-daemon
         continue-on-error: false
 
-      # 列出所有生成的 APK，若为空则直接失败，避免误判构建成功
       - name: List generated APKs
         if: success()
         run: |
@@ -61,7 +61,6 @@ jobs:
              exit 1
           fi
 
-      # 上传所有 Debug APK（支持多产品风味）
       - name: Upload Debug APKs
         if: success()
         uses: actions/upload-artifact@v4
@@ -71,7 +70,6 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
-      # 构建失败时上传日志用于诊断
       - name: Upload build logs on failure
         if: failure()
         uses: actions/upload-artifact@v4

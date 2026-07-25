@@ -53,16 +53,18 @@ jobs:
 
       # 列出所有生成的 APK
       - name: List generated APKs
+        if: success()
         run: find app/build/outputs/apk -name "*.apk" -type f
 
       # 上传所有 Debug APK（支持多产品风味）
       - name: Upload Debug APKs
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: TVBox-debug-apks
-          path: app/build/outputs/apk/**/**.apk
+          path: app/build/outputs/apk/**/*.apk
           retention-days: 7
+          if-no-files-found: warn
 
       # 构建失败时上传日志用于诊断
       - name: Upload build logs on failure
@@ -104,14 +106,18 @@ jobs:
             ~/.android/build-cache
             ~/.android/avd
           key: ${{ runner.os }}-android-sdk-${{ hashFiles('**/build.gradle') }}
+          restore-keys: |
+            ${{ runner.os }}-android-sdk-
 
       - name: Build Release APK
         run: ./gradlew assembleRelease -v --stacktrace --no-daemon
         continue-on-error: false
 
       - name: Upload Release APKs
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: TVBox-release-apks
-          path: app/build/outputs/apk/**/**.apk
+          path: app/build/outputs/apk/**/*.apk
           retention-days: 14
+          if-no-files-found: warn
